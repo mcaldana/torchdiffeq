@@ -191,68 +191,46 @@ class _PerturbFunc(torch.nn.Module):
 
 def _check_inputs(func, y0, t, rtol, atol, method, options, event_fn, SOLVERS):
 
-    if event_fn is not None:
-        if len(t) != 2:
-            raise ValueError(f"We require len(t) == 2 when in event handling mode, but got len(t)={len(t)}.")
-
-        # Combine event functions if the output is multivariate.
-        event_fn = combine_event_functions(event_fn, t[0], y0)
-
     # Normalise to tensor (non-tupled) input
     shapes = None
-    is_tuple = not isinstance(y0, torch.Tensor)
-    if is_tuple:
-        assert isinstance(y0, tuple), 'y0 must be either a torch.Tensor or a tuple'
-        shapes = [y0_.shape for y0_ in y0]
-        rtol = _tuple_tol('rtol', rtol, shapes)
-        atol = _tuple_tol('atol', atol, shapes)
-        y0 = torch.cat([y0_.reshape(-1) for y0_ in y0])
-        func = _TupleFunc(func, shapes)
-        if event_fn is not None:
-            event_fn = _TupleInputOnlyFunc(event_fn, shapes)
+    assert isinstance(y0, torch.Tensor)
+    # if is_tuple:
+    #     assert isinstance(y0, tuple), 'y0 must be either a torch.Tensor or a tuple'
+    #     shapes = [y0_.shape for y0_ in y0]
+    #     rtol = _tuple_tol('rtol', rtol, shapes)
+    #     atol = _tuple_tol('atol', atol, shapes)
+    #     y0 = torch.cat([y0_.reshape(-1) for y0_ in y0])
+    #     func = _TupleFunc(func, shapes)
+    #     if event_fn is not None:
+    #         event_fn = _TupleInputOnlyFunc(event_fn, shapes)
     _assert_floating('y0', y0)
 
     # Normalise method and options
     if options is None:
         options = {}
-    else:
-        options = options.copy()
-    if method is None:
-        method = 'dopri5'
-    if method not in SOLVERS:
-        raise ValueError('Invalid method "{}". Must be one of {}'.format(method,
-                                                                         '{"' + '", "'.join(SOLVERS.keys()) + '"}.'))
+    assert method is not None
 
-    if is_tuple:
-        # We accept tupled input. This is an abstraction that is hidden from the rest of odeint (exception when
-        # returning values), so here we need to maintain the abstraction by wrapping norm functions.
+    # if is_tuple:
+    #     # We accept tupled input. This is an abstraction that is hidden from the rest of odeint (exception when
+    #     # returning values), so here we need to maintain the abstraction by wrapping norm functions.
 
-        if 'norm' in options:
-            # If the user passed a norm then get that...
-            norm = options['norm']
-        else:
-            # ...otherwise we default to a mixed Linf/L2 norm over tupled input.
-            norm = _mixed_norm
+    #     if 'norm' in options:
+    #         # If the user passed a norm then get that...
+    #         norm = options['norm']
+    #     else:
+    #         # ...otherwise we default to a mixed Linf/L2 norm over tupled input.
+    #         norm = _mixed_norm
 
-        # In either case, norm(...) is assumed to take a tuple of tensors as input. (As that's what the state looks
-        # like from the point of view of the user.)
-        # So here we take the tensor that the machinery of odeint has given us, and turn it in the tuple that the
-        # norm function is expecting.
-        def _norm(tensor):
-            y = _flat_to_shape(tensor, (), shapes)
-            return norm(y)
-        options['norm'] = _norm
-
-    else:
-        if 'norm' in options:
-            # No need to change the norm function.
-            pass
-        else:
-            # Else just use the default norm.
-            # Technically we don't need to set that here (RKAdaptiveStepsizeODESolver has it as a default), but it
-            # makes it easier to reason about, in the adjoint norm logic, if we know that options['norm'] is
-            # definitely set to something.
-            options['norm'] = _rms_norm
+    #     # In either case, norm(...) is assumed to take a tuple of tensors as input. (As that's what the state looks
+    #     # like from the point of view of the user.)
+    #     # So here we take the tensor that the machinery of odeint has given us, and turn it in the tuple that the
+    #     # norm function is expecting.
+    #     def _norm(tensor):
+    #         y = _flat_to_shape(tensor, (), shapes)
+    #         return norm(y)
+    #     options['norm'] = _norm
+    if 'norm' not in options:
+        options['norm'] = _rms_norm
 
     # Normalise time
     _check_timelike('t', t, True)
@@ -267,20 +245,6 @@ def _check_inputs(func, y0, t, rtol, atol, method, options, event_fn, SOLVERS):
 
         # Ensure time values are un-negated when calling functions.
         func = _ReverseFunc(func, mul=-1.0)
-        if event_fn is not None:
-            event_fn = _ReverseFunc(event_fn)
-
-        # For fixed step solvers.
-        try:
-            _grid_constructor = options['grid_constructor']
-        except KeyError:
-            pass
-        else:
-            options['grid_constructor'] = lambda func, y0, t: -_grid_constructor(func, y0, -t)
-
-        # For RK solvers.
-        _flip_option(options, 'step_t')
-        _flip_option(options, 'jump_t')
 
     # Can only do after having normalised time
     _assert_increasing('t', t)
@@ -292,10 +256,7 @@ def _check_inputs(func, y0, t, rtol, atol, method, options, event_fn, SOLVERS):
         assert not atol.requires_grad, "atol cannot require gradient"
 
     # Backward compatibility: Allow t and y0 to be on different devices
-    if t.device != y0.device:
-        warnings.warn("t is not on the same device as y0. Coercing to y0.device.")
-        t = t.to(y0.device)
-    # ~Backward compatibility
+    assert t.device == y0.device
 
     # Add perturb argument to func.
     func = _PerturbFunc(func)
@@ -315,20 +276,8 @@ class _StitchGradient(torch.autograd.Function):
 
 def _nextafter(x1, x2):
     with torch.no_grad():
-        if hasattr(torch, "nextafter"):
-            out = torch.nextafter(x1, x2)
-        else:
-            out = np_nextafter(x1, x2)
+        out = torch.nextafter(x1, x2)
     return _StitchGradient.apply(x1, out)
-
-
-def np_nextafter(x1, x2):
-    warnings.warn("torch.nextafter is only available in PyTorch 1.7 or newer."
-                  "Falling back to numpy.nextafter. Upgrade PyTorch to remove this warning.")
-    x1_np = x1.detach().cpu().numpy()
-    x2_np = x2.detach().cpu().numpy()
-    out = torch.tensor(np.nextafter(x1_np, x2_np)).to(x1)
-    return out
 
 
 def _check_timelike(name, timelike, can_grad):
@@ -339,15 +288,3 @@ def _check_timelike(name, timelike, can_grad):
         assert not timelike.requires_grad, "{} cannot require gradient".format(name)
     diff = timelike[1:] > timelike[:-1]
     assert diff.all() or (~diff).all(), '{} must be strictly increasing or decreasing'.format(name)
-
-
-def _flip_option(options, option_name):
-    try:
-        option_value = options[option_name]
-    except KeyError:
-        pass
-    else:
-        if isinstance(option_value, torch.Tensor):
-            options[option_name] = -option_value
-        # else: an error will be raised when the option is attempted to be used in Solver.__init__, but we defer raising
-        # the error until then to keep things tidy.

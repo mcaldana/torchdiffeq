@@ -4,8 +4,8 @@ from matplotlib.pyplot import autoscale
 import torch
 import torch.nn as nn
 from .odeint import SOLVERS, odeint
-from .misc import _check_inputs, _TupleFunc
-from .misc import _mixed_norm, _flat_to_shape
+from .misc import _check_inputs
+from .misc import _mixed_norm
 
 
 class OdeintAdjointMethod(torch.autograd.Function):
@@ -54,8 +54,6 @@ class OdeintAdjointMethod(torch.autograd.Function):
             aug_state = [torch.zeros((), dtype=y.dtype, device=y.device), y[-1], grad_y[-1]]  # vjp_t, y, vjp_y
             aug_state.extend([torch.zeros_like(param) for param in adjoint_params])  # vjp_params
 
-            shapes = [a.shape for a in aug_state]
-
             ##################################
             #    Set up backward ODE func    #
             ##################################
@@ -96,8 +94,6 @@ class OdeintAdjointMethod(torch.autograd.Function):
 
                 return (-vjp_t, -func_eval, -vjp_y, *vjp_params)
 
-            augmented_dynamics_flat = _TupleFunc(augmented_dynamics, shapes)
-
             ##################################
             #       Solve adjoint ODE        #
             ##################################
@@ -117,16 +113,15 @@ class OdeintAdjointMethod(torch.autograd.Function):
 
                 # Run the augmented system backwards in time.
                 aug_state = odeint(
-                    augmented_dynamics_flat, torch.cat([a.reshape(-1) for a in aug_state]),
+                    augmented_dynamics, tuple(aug_state),
                     -t[i - 1:i + 1].flip(0),
                     rtol=adjoint_rtol, atol=adjoint_atol, method=adjoint_method, options=adjoint_options
                 )
-                aug_state = _flat_to_shape_list(aug_state[1], (), shapes)
                 # print([a.shape for a in aug_state])
                 # print('y', y[i - 1].shape, y[i - 1])
                 # print('grad', grad_y[i - 1].shape, grad_y[i - 1])
                 # print('aug', aug_flat[1].shape)
-                #aug_state = [a[1] for a in aug_state]  # extract just the t[i - 1] value
+                aug_state = [a[1] for a in aug_state]  # extract just the t[i - 1] value
                 aug_state[1] = y[i - 1]  # update to use our forward-pass estimate of the state
                 aug_state[2] += grad_y[i - 1]  # update any gradients wrt state at this time point
 

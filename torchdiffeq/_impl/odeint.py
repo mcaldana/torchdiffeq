@@ -7,7 +7,7 @@ from .fixed_grid import Euler, Midpoint, RK4
 from .fixed_adams import AdamsBashforth, AdamsBashforthMoulton
 from .dopri8 import Dopri8Solver
 from .scipy_wrapper import ScipyWrapperODESolver
-from .misc import _check_inputs
+from .misc import _check_inputs, _flat_to_shape
 
 SOLVERS = {
     'dopri8': Dopri8Solver,
@@ -71,5 +71,7 @@ def odeint(func, y0, t, *, rtol=1e-7, atol=1e-9, method=None, options=None):
     shapes, func, y0, t, rtol, atol, method, options, _, _ = _check_inputs(func, y0, t, rtol, atol, method, options, None, SOLVERS)
     solver = SOLVERS[method](func=func, y0=y0, rtol=rtol, atol=atol, **options)
 
-    assert shapes is None 
+    if shapes is not None:
+        return _flat_to_shape(solver.integrate(t), (len(t),), shapes)
+
     return solver.integrate(t)

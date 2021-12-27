@@ -193,14 +193,14 @@ def _check_inputs(func, y0, t, rtol, atol, method, options, event_fn, SOLVERS):
 
     # Normalise to tensor (non-tupled) input
     shapes = None
-    assert isinstance(y0, torch.Tensor)
-    # if is_tuple:
-    #     assert isinstance(y0, tuple), 'y0 must be either a torch.Tensor or a tuple'
-    #     shapes = [y0_.shape for y0_ in y0]
-    #     rtol = _tuple_tol('rtol', rtol, shapes)
-    #     atol = _tuple_tol('atol', atol, shapes)
-    #     y0 = torch.cat([y0_.reshape(-1) for y0_ in y0])
-    #     func = _TupleFunc(func, shapes)
+    is_tuple = not isinstance(y0, torch.Tensor)
+    if is_tuple:
+        assert isinstance(y0, tuple), 'y0 must be either a torch.Tensor or a tuple'
+        shapes = [y0_.shape for y0_ in y0]
+        rtol = _tuple_tol('rtol', rtol, shapes)
+        atol = _tuple_tol('atol', atol, shapes)
+        y0 = torch.cat([y0_.reshape(-1) for y0_ in y0])
+        func = _TupleFunc(func, shapes)
     #     if event_fn is not None:
     #         event_fn = _TupleInputOnlyFunc(event_fn, shapes)
     _assert_floating('y0', y0)
@@ -210,26 +210,21 @@ def _check_inputs(func, y0, t, rtol, atol, method, options, event_fn, SOLVERS):
         options = {}
     assert method is not None
 
-    # if is_tuple:
-    #     # We accept tupled input. This is an abstraction that is hidden from the rest of odeint (exception when
-    #     # returning values), so here we need to maintain the abstraction by wrapping norm functions.
+    if is_tuple:
+        # We accept tupled input. This is an abstraction that is hidden from the rest of odeint (exception when
+        # returning values), so here we need to maintain the abstraction by wrapping norm functions.
 
-    #     if 'norm' in options:
-    #         # If the user passed a norm then get that...
-    #         norm = options['norm']
-    #     else:
-    #         # ...otherwise we default to a mixed Linf/L2 norm over tupled input.
-    #         norm = _mixed_norm
+        norm = _mixed_norm
 
-    #     # In either case, norm(...) is assumed to take a tuple of tensors as input. (As that's what the state looks
-    #     # like from the point of view of the user.)
-    #     # So here we take the tensor that the machinery of odeint has given us, and turn it in the tuple that the
-    #     # norm function is expecting.
-    #     def _norm(tensor):
-    #         y = _flat_to_shape(tensor, (), shapes)
-    #         return norm(y)
-    #     options['norm'] = _norm
-    if 'norm' not in options:
+        # In either case, norm(...) is assumed to take a tuple of tensors as input. (As that's what the state looks
+        # like from the point of view of the user.)
+        # So here we take the tensor that the machinery of odeint has given us, and turn it in the tuple that the
+        # norm function is expecting.
+        def _norm(tensor):
+            y = _flat_to_shape(tensor, (), shapes)
+            return norm(y)
+        options['norm'] = _norm
+    elif 'norm' not in options:
         options['norm'] = _rms_norm
 
     # Normalise time

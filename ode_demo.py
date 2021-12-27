@@ -21,7 +21,11 @@ parser.add_argument('--seed', type=int, default=0)
 parser.add_argument('--viz', action='store_true')
 args = parser.parse_args()
 
-logging.basicConfig(filename='./logs/out{}.log'.format(int(datetime.datetime.now().timestamp())), level=logging.DEBUG)
+logging.basicConfig(
+    filename='./logs/out{}.log'.format(int(datetime.datetime.now().timestamp())), 
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)s %(message)s'
+)
 logging.info('data_size:{}, batch_time:{}, batch_size:{}, test_freq:{}, seed:{}'.format(
                 args.data_size,  args.batch_time, args.batch_size, args.test_freq, args.seed)
             )

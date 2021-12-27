@@ -235,18 +235,18 @@ def _check_inputs(func, y0, t, rtol, atol, method, options, event_fn, SOLVERS):
     # Normalise time
     _check_timelike('t', t, True)
     t_is_reversed = False
-    if len(t) > 1 and t[0] > t[1]:
-        t_is_reversed = True
+    # if len(t) > 1 and t[0] > t[1]:
+    #     t_is_reversed = True
 
-    if t_is_reversed:
-        # Change the integration times to ascending order.
-        # We do this by negating the time values and all associated arguments.
-        t = -t
+    # if t_is_reversed:
+    #     # Change the integration times to ascending order.
+    #     # We do this by negating the time values and all associated arguments.
+    #     t = -t
 
-        # Ensure time values are un-negated when calling functions.
-        func = _ReverseFunc(func, mul=-1.0)
+    #     # Ensure time values are un-negated when calling functions.
+    #     func = _ReverseFunc(func, mul=-1.0)
 
-    # Can only do after having normalised time
+    # # Can only do after having normalised time
     _assert_increasing('t', t)
 
     # Tol checking

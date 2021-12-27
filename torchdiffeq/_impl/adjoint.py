@@ -74,7 +74,7 @@ class OdeintAdjointMethod(torch.autograd.Function):
                 # ignore gradients wrt time and parameters
 
                 with torch.enable_grad():
-                    t_ = t.detach()
+                    t_ = -t.detach()
                     t = t_.requires_grad_(True)
                     y = y.detach().requires_grad_(True)
 
@@ -99,7 +99,7 @@ class OdeintAdjointMethod(torch.autograd.Function):
                 vjp_params = [torch.zeros_like(param) if vjp_param is None else vjp_param
                               for param, vjp_param in zip(adjoint_params, vjp_params)]
 
-                return torch.cat([f_.reshape(-1) for f_ in (vjp_t, func_eval, vjp_y, *vjp_params)])
+                return -torch.cat([f_.reshape(-1) for f_ in (vjp_t, func_eval, vjp_y, *vjp_params)])
 
             ##################################
             #       Solve adjoint ODE        #
@@ -122,7 +122,7 @@ class OdeintAdjointMethod(torch.autograd.Function):
 
                 aug_flat = odeint(
                     augmented_dynamics, aug_flat,
-                    t[i - 1:i + 1].flip(0),
+                    -t[i - 1:i + 1].flip(0),
                     rtol=adjoint_rtol, atol=adjoint_atol, method=adjoint_method, options=adjoint_options
                 )
                 # print('y', y[i - 1].shape, y[i - 1])

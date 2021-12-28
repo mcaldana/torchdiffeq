@@ -1,13 +1,12 @@
 import bisect
 import collections
 import torch
-from .event_handling import find_event
 from .interp import _interp_evaluate, _interp_fit
 from .misc import (_compute_error_ratio,
                    _select_initial_step,
                    _optimal_step_size)
 from .misc import Perturb
-from .solvers import AdaptiveStepsizeEventODESolver
+from .solvers import AdaptiveStepsizeODESolver
 
 
 _ButcherTableau = collections.namedtuple('_ButcherTableau', 'alpha, beta, c_sol, c_error')
@@ -89,18 +88,6 @@ def _runge_kutta_step(func, y0, f0, t0, dt, t1, tableau):
 # Precompute divisions
 _one_third = 1 / 3
 _two_thirds = 2 / 3
-_one_sixth = 1 / 6
-
-
-def rk4_step_func(func, t0, dt, t1, y0, f0=None, perturb=False):
-    k1 = f0
-    if k1 is None:
-        k1 = func(t0, y0, perturb=Perturb.NEXT if perturb else Perturb.NONE)
-    half_dt = dt * 0.5
-    k2 = func(t0 + half_dt, y0 + half_dt * k1)
-    k3 = func(t0 + half_dt, y0 + half_dt * k2)
-    k4 = func(t1, y0 + dt * k3, perturb=Perturb.PREV if perturb else Perturb.NONE)
-    return (k1 + 2 * (k2 + k3) + k4) * dt * _one_sixth
 
 
 def rk4_alt_step_func(func, t0, dt, t1, y0, f0=None, perturb=False):
@@ -114,15 +101,12 @@ def rk4_alt_step_func(func, t0, dt, t1, y0, f0=None, perturb=False):
     return (k1 + 3 * (k2 + k3) + k4) * dt * 0.125
 
 
-class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeEventODESolver):
+class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeODESolver):
     order: int
     tableau: _ButcherTableau
     mid: torch.Tensor
 
     def __init__(self, func, y0, rtol, atol,
-                 first_step=None,
-                 step_t=None,
-                 jump_t=None,
                  safety=0.9,
                  ifactor=10.0,
                  dfactor=0.2,
@@ -139,15 +123,11 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeEventODESolver):
         self.func = func
         self.rtol = torch.as_tensor(rtol, dtype=dtype, device=device)
         self.atol = torch.as_tensor(atol, dtype=dtype, device=device)
-        self.first_step = None if first_step is None else torch.as_tensor(first_step, dtype=dtype, device=device)
         self.safety = torch.as_tensor(safety, dtype=dtype, device=device)
         self.ifactor = torch.as_tensor(ifactor, dtype=dtype, device=device)
         self.dfactor = torch.as_tensor(dfactor, dtype=dtype, device=device)
         self.max_num_steps = torch.as_tensor(max_num_steps, dtype=torch.int32, device=device)
         self.dtype = dtype
-
-        self.step_t = None if step_t is None else torch.as_tensor(step_t, dtype=dtype, device=device)
-        self.jump_t = None if jump_t is None else torch.as_tensor(jump_t, dtype=dtype, device=device)
 
         # Copy from class to instance to set device
         self.tableau = _ButcherTableau(alpha=self.tableau.alpha.to(device=device, dtype=y0.dtype),
@@ -157,34 +137,10 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeEventODESolver):
         self.mid = self.mid.to(device=device, dtype=y0.dtype)
 
     def _before_integrate(self, t):
-        t0 = t[0]
         f0 = self.func(t[0], self.y0)
-        if self.first_step is None:
-            first_step = _select_initial_step(self.func, t[0], self.y0, self.order - 1, self.rtol, self.atol,
+        first_step = _select_initial_step(self.func, t[0], self.y0, self.order - 1, self.rtol, self.atol,
                                               self.norm, f0=f0)
-        else:
-            first_step = self.first_step
         self.rk_state = _RungeKuttaState(self.y0, f0, t[0], t[0], first_step, [self.y0] * 5)
-
-        # Handle step_t and jump_t arguments.
-        if self.step_t is None:
-            step_t = torch.tensor([], dtype=self.dtype, device=self.y0.device)
-        else:
-            step_t = _sort_tvals(self.step_t, t0)
-            step_t = step_t.to(self.dtype)
-        if self.jump_t is None:
-            jump_t = torch.tensor([], dtype=self.dtype, device=self.y0.device)
-        else:
-            jump_t = _sort_tvals(self.jump_t, t0)
-            jump_t = jump_t.to(self.dtype)
-        counts = torch.cat([step_t, jump_t]).unique(return_counts=True)[1]
-        if (counts > 1).any():
-            raise ValueError("`step_t` and `jump_t` must not have any repeated elements between them.")
-
-        self.step_t = step_t
-        self.jump_t = jump_t
-        self.next_step_index = min(bisect.bisect(self.step_t.tolist(), t[0]), len(self.step_t) - 1)
-        self.next_jump_index = min(bisect.bisect(self.jump_t.tolist(), t[0]), len(self.jump_t) - 1)
 
     def _advance(self, next_t):
         """Interpolate through the next time point, integrating as necessary."""
@@ -194,20 +150,6 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeEventODESolver):
             self.rk_state = self._adaptive_step(self.rk_state)
             n_steps += 1
         return _interp_evaluate(self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, next_t)
-
-    def _advance_until_event(self, event_fn):
-        """Returns t, state(t) such that event_fn(t, state(t)) == 0."""
-        if event_fn(self.rk_state.t1, self.rk_state.y1) == 0:
-            return (self.rk_state.t1, self.rk_state.y1)
-
-        n_steps = 0
-        sign0 = torch.sign(event_fn(self.rk_state.t1, self.rk_state.y1))
-        while sign0 == torch.sign(event_fn(self.rk_state.t1, self.rk_state.y1)):
-            assert n_steps < self.max_num_steps, 'max_num_steps exceeded ({}>={})'.format(n_steps, self.max_num_steps)
-            self.rk_state = self._adaptive_step(self.rk_state)
-            n_steps += 1
-        interp_fn = lambda t: _interp_evaluate(self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, t)
-        return find_event(interp_fn, sign0, self.rk_state.t0, self.rk_state.t1, event_fn, self.atol)
 
     def _adaptive_step(self, rk_state):
         """Take an adaptive Runge-Kutta step to integrate the ODE."""
@@ -231,23 +173,6 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeEventODESolver):
         ########################################################
         #     Make step, respecting prescribed grid points     #
         ########################################################
-
-        on_step_t = False
-        if len(self.step_t):
-            next_step_t = self.step_t[self.next_step_index]
-            on_step_t = t0 < next_step_t < t0 + dt
-            if on_step_t:
-                t1 = next_step_t
-                dt = t1 - t0
-
-        on_jump_t = False
-        if len(self.jump_t):
-            next_jump_t = self.jump_t[self.next_jump_index]
-            on_jump_t = t0 < next_jump_t < t0 + dt
-            if on_jump_t:
-                on_step_t = False
-                t1 = next_jump_t
-                dt = t1 - t0
 
         # Must be arranged as doing all the step_t handling, then all the jump_t handling, in case we
         # trigger both. (i.e. interleaving them would be wrong.)
@@ -274,15 +199,6 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeEventODESolver):
             t_next = t1
             y_next = y1
             interp_coeff = self._interp_fit(y0, y_next, k, dt)
-            if on_step_t:
-                if self.next_step_index != len(self.step_t) - 1:
-                    self.next_step_index += 1
-            if on_jump_t:
-                if self.next_jump_index != len(self.jump_t) - 1:
-                    self.next_jump_index += 1
-                # We've just passed a discontinuity in f; we should update f to match the side of the discontinuity
-                # we're now on.
-                f1 = self.func(t_next, y_next, perturb=Perturb.NEXT)
             f_next = f1
         else:
             t_next = t0
@@ -299,9 +215,3 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeEventODESolver):
         f0 = k[..., 0]
         f1 = k[..., -1]
         return _interp_fit(y0, y1, y_mid, f0, f1, dt)
-
-
-def _sort_tvals(tvals, t0):
-    # TODO: add warning if tvals come before t0?
-    tvals = tvals[tvals >= t0]
-    return torch.sort(tvals).values

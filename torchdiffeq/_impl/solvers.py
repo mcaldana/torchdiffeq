@@ -31,20 +31,6 @@ class AdaptiveStepsizeODESolver(metaclass=abc.ABCMeta):
         return solution
 
 
-class AdaptiveStepsizeEventODESolver(AdaptiveStepsizeODESolver, metaclass=abc.ABCMeta):
-
-    @abc.abstractmethod
-    def _advance_until_event(self, event_fn):
-        raise NotImplementedError
-
-    def integrate_until_event(self, t0, event_fn):
-        t0 = t0.to(self.y0.device, self.dtype)
-        self._before_integrate(t0.reshape(-1))
-        event_time, y1 = self._advance_until_event(event_fn)
-        solution = torch.stack([self.y0, y1], dim=0)
-        return event_time, solution
-
-
 class FixedGridODESolver(metaclass=abc.ABCMeta):
     order: int
 
@@ -117,42 +103,6 @@ class FixedGridODESolver(metaclass=abc.ABCMeta):
             y0 = y1
 
         return solution
-
-    def integrate_until_event(self, t0, event_fn):
-        assert self.step_size is not None, "Event handling for fixed step solvers currently requires `step_size` to be provided in options."
-
-        t0 = t0.type_as(self.y0)
-        y0 = self.y0
-        dt = self.step_size
-
-        sign0 = torch.sign(event_fn(t0, y0))
-        max_itrs = 20000
-        itr = 0
-        while True:
-            itr += 1
-            t1 = t0 + dt
-            dy, f0 = self._step_func(self.func, t0, dt, t1, y0)
-            y1 = y0 + dy
-
-            sign1 = torch.sign(event_fn(t1, y1))
-
-            if sign0 != sign1:
-                if self.interp == "linear":
-                    interp_fn = lambda t: self._linear_interp(t0, t1, y0, y1, t)
-                elif self.interp == "cubic":
-                    f1 = self.func(t1, y1)
-                    interp_fn = lambda t: self._cubic_hermite_interp(t0, y0, f0, t1, y1, f1, t)
-                else:
-                    raise ValueError(f"Unknown interpolation method {self.interp}")
-                event_time, y1 = find_event(interp_fn, sign0, t0, t1, event_fn, float(self.atol))
-                break
-            else:
-                t0, y0 = t1, y1
-
-            if itr >= max_itrs:
-                raise RuntimeError(f"Reached maximum number of iterations {max_itrs}.")
-        solution = torch.stack([self.y0, y1], dim=0)
-        return event_time, solution
 
     def _cubic_hermite_interp(self, t0, y0, f0, t1, y1, f1, t):
         h = (t - t0) / (t1 - t0)

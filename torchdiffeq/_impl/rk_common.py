@@ -25,18 +25,6 @@ _RungeKuttaState = collections.namedtuple('_RungeKuttaState', 'y1, f1, t0, t1, d
 #         interpolation between `t0` and `t1`.
 
 
-class _UncheckedAssign(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, scratch, value, index):
-        ctx.index = index
-        scratch.data[index] = value  # sneak past the version checker
-        return scratch
-
-    @staticmethod
-    def backward(ctx, grad_scratch):
-        return grad_scratch, grad_scratch[ctx.index], None
-
-
 def _runge_kutta_step(func, y0, f0, t0, dt, t1, tableau):
     """Take an arbitrary Runge-Kutta step and estimate error.
     Args:
@@ -62,7 +50,7 @@ def _runge_kutta_step(func, y0, f0, t0, dt, t1, tableau):
     # We use an unchecked assign to put data into k without incrementing its _version counter, so that the backward
     # doesn't throw an (overzealous) error about in-place correctness. We know that it's actually correct.
     k = torch.empty(*f0.shape, len(tableau.alpha) + 1, dtype=y0.dtype, device=y0.device)
-    k = _UncheckedAssign.apply(k, f0, (..., 0))
+    k[..., 0] = f0
     for i, (alpha_i, beta_i) in enumerate(zip(tableau.alpha, tableau.beta)):
         if alpha_i == 1.:
             # Always step to perturbing just before the end time, in case of discontinuities.
@@ -73,7 +61,7 @@ def _runge_kutta_step(func, y0, f0, t0, dt, t1, tableau):
             perturb = Perturb.NONE
         yi = y0 + k[..., :i + 1].matmul(beta_i * dt).view_as(f0)
         f = func(ti, yi, perturb=perturb)
-        k = _UncheckedAssign.apply(k, f, (..., i + 1))
+        k[..., i + 1] = f
 
     if not (tableau.c_sol[-1] == 0 and (tableau.c_sol[:-1] == tableau.beta[-1]).all()):
         # This property (true for Dormand-Prince) lets us save a few FLOPs.

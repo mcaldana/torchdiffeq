@@ -41,7 +41,6 @@ true_A = torch.tensor([[-0.1, 2.0], [-2.0, -0.1]]).to(device)
 
 
 class Lambda(nn.Module):
-
     def forward(self, t, y):
         return torch.mm(y**3, true_A)
 
@@ -137,25 +136,6 @@ class ODEFunc(nn.Module):
         return self.net(y**3)
 
 
-class RunningAverageMeter(object):
-    """Computes and stores the average and current value"""
-
-    def __init__(self, momentum=0.99):
-        self.momentum = momentum
-        self.reset()
-
-    def reset(self):
-        self.val = None
-        self.avg = 0
-
-    def update(self, val):
-        if self.val is None:
-            self.avg = val
-        else:
-            self.avg = self.avg * self.momentum + val * (1 - self.momentum)
-        self.val = val
-
-
 if __name__ == '__main__':
 
     ii = 0
@@ -163,11 +143,6 @@ if __name__ == '__main__':
     func = ODEFunc().to(device)
     
     optimizer = optim.RMSprop(func.parameters(), lr=1e-3)
-    end = time.time()
-
-    time_meter = RunningAverageMeter(0.97)
-    
-    loss_meter = RunningAverageMeter(0.97)
 
     for itr in range(1, args.niters + 1):
         optimizer.zero_grad()
@@ -177,16 +152,12 @@ if __name__ == '__main__':
         loss.backward()
         optimizer.step()
 
-        time_meter.update(time.time() - end)
-        loss_meter.update(loss.item())
-        logging.info(loss.item())
+        logging.info('Loss: {}'.format(loss.item()))
 
         if itr % args.test_freq == 0:
             with torch.no_grad():
                 pred_y = odeint(func, true_y0, t, method='dopri5')
                 loss = torch.mean(torch.abs(pred_y - true_y))
-                logging.info('Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
+                logging.info('TEST | Iter {:04d} | Total Loss {:.6f}'.format(itr, loss.item()))
                 visualize(true_y, pred_y, func, ii)
                 ii += 1
-
-        end = time.time()

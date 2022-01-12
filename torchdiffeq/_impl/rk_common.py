@@ -21,6 +21,8 @@ def tensor_to_cpp(tensor, i=0):
     s = s.replace(')', ',cTOptions)')
     s = s.replace('grad_fn=<CopySlices>,', '')
     s = s.replace('grad_fn=<MeanBackward0>,', '')
+    s = s.replace('requires_grad=True,', '')
+    s = s.replace('Parameter containing:\n', '')
     s = "const auto t{} = ".format(i) + s + ";\n"
     print(s)
     return
@@ -178,13 +180,21 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeODESolver):
         """Interpolate through the next time point, integrating as necessary."""
         t1 = time.time()
         n_steps = 0
-        while next_t > self.rk_state.t1:
-            assert n_steps < self.max_num_steps, 'max_num_steps exceeded ({}>={})'.format(n_steps, self.max_num_steps)
-            # print('==========step', n_steps)
-            # tl(*self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, self.rk_state.dt, self.rk_state.y1, self.rk_state.f1)      
+        # while next_t > self.rk_state.t1:
+        #     assert n_steps < self.max_num_steps, 'max_num_steps exceeded ({}>={})'.format(n_steps, self.max_num_steps)
+        #     # print('==========step', n_steps)
+        #     # tl(*self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, self.rk_state.dt, self.rk_state.y1, self.rk_state.f1)      
 
-            self.rk_state = self._adaptive_step(self.rk_state)
-            n_steps += 1
+        #     self.rk_state = self._adaptive_step(self.rk_state)
+        #     n_steps += 1
+        self.rk_state = _RungeKuttaState(
+            self.rk_state.y1, 
+            self.rk_state.f1, 
+            self.rk_state.t0, 
+            next_t + self.rk_state.dt, 
+            self.rk_state.dt, 
+            self.rk_state.interp_coeff
+        )
 
         t5 = time.time()
         eval = _interp_evaluate(self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, next_t)

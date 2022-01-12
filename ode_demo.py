@@ -154,9 +154,7 @@ if __name__ == '__main__':
         optimizer.step()
 
         tl(batch_y0, batch_t, batch_y, pred_y, loss)
-        for p in func.parameters():
-            print(p.grad)
-        
+        tl(*[p.grad for p in func.parameters()])
         #print([p for p in func.parameters()])
         #logging.info('Loss: {}'.format(loss.item()))
         raise ValueError("AABB")

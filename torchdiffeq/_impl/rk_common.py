@@ -1,4 +1,4 @@
-import bisect
+import time
 import collections
 import torch
 from .interp import _interp_evaluate, _interp_fit
@@ -7,6 +7,27 @@ from .misc import (_compute_error_ratio,
                    _optimal_step_size)
 from .misc import Perturb
 from .solvers import AdaptiveStepsizeODESolver
+
+def tensor_to_cpp(tensor, i=0):
+    torch.set_printoptions(precision=17, threshold=10_000)
+    s = tensor.__repr__()
+    s = s.replace('[', '{')
+    s = s.replace(']', '}')
+    s = s.replace('\n\n', '\n')
+    s = s.replace('tensor', 'torch::tensor')
+    s = s.replace(""",
+       dtype=torch.float64""", '')
+    s = s.replace(""", dtype=torch.float64""", '')
+    s = s.replace(')', ',cTOptions)')
+    s = s.replace('grad_fn=<CopySlices>,', '')
+    s = s.replace('grad_fn=<MeanBackward0>,', '')
+    s = "const auto t{} = ".format(i) + s + ";\n"
+    print(s)
+    return
+
+def tl(*tensors):
+    for i, t in enumerate(tensors):
+        tensor_to_cpp(t, i)
 
 
 _ButcherTableau = collections.namedtuple('_ButcherTableau', 'alpha, beta, c_sol, c_error')
@@ -124,65 +145,78 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeODESolver):
                                        c_error=self.tableau.c_error.to(device=device, dtype=y0.dtype))
         self.mid = self.mid.to(device=device, dtype=y0.dtype)
 
+        self.profiler = {
+            "_before_integrate": 0,
+            "_select_initial_step": 0,
+            "_advance": 0,
+            "_adaptive_step": 0,
+            "_interp_evaluate": 0,
+            "_runge_kutta_step": 0,
+            "_compute_error_ratio": 0,
+            "_interp_fit": 0,
+            "_optimal_step_size": 0,
+            "_interp_fit_ext": 0,
+        }
+
     def _before_integrate(self, t):
+        t1 = time.time()
         f0 = self.func(t[0], self.y0)
+
+        t3 = time.time()
         first_step = _select_initial_step(self.func, t[0], self.y0, self.order - 1, self.rtol, self.atol,
                                               self.norm, f0=f0)
+
+        
+        t4 = time.time()
+        self.profiler['_select_initial_step'] += t4 - t3
+
         self.rk_state = _RungeKuttaState(self.y0, f0, t[0], t[0], first_step, [self.y0] * 5)
+        t2 = time.time()
+        self.profiler['_before_integrate'] += t2 - t1
 
     def _advance(self, next_t):
         """Interpolate through the next time point, integrating as necessary."""
+        t1 = time.time()
         n_steps = 0
         while next_t > self.rk_state.t1:
             assert n_steps < self.max_num_steps, 'max_num_steps exceeded ({}>={})'.format(n_steps, self.max_num_steps)
+            # print('==========step', n_steps)
+            # tl(*self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, self.rk_state.dt, self.rk_state.y1, self.rk_state.f1)      
+
             self.rk_state = self._adaptive_step(self.rk_state)
             n_steps += 1
-        return _interp_evaluate(self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, next_t)
+
+        t5 = time.time()
+        eval = _interp_evaluate(self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, next_t)
+        t6 = time.time()
+        self.profiler['_interp_evaluate'] += t6 - t5
+        
+        t2 = time.time()
+        self.profiler['_advance'] += t2 - t1
+        return eval
 
     def _adaptive_step(self, rk_state):
         """Take an adaptive Runge-Kutta step to integrate the ODE."""
+        tt1 = time.time()
+
+
         y0, f0, _, t0, dt, interp_coeff = rk_state
         t1 = t0 + dt
-        # dtypes: self.y0.dtype (probably float32); self.dtype (probably float64)
-        # used for state and timelike objects respectively.
-        # Then:
-        # y0.dtype == self.y0.dtype
-        # f0.dtype == self.y0.dtype
-        # t0.dtype == self.dtype
-        # dt.dtype == self.dtype
-        # for coeff in interp_coeff: coeff.dtype == self.y0.dtype
 
-        ########################################################
-        #                      Assertions                      #
-        ########################################################
         assert t0 + dt > t0, 'underflow in dt {}'.format(dt.item())
         assert torch.isfinite(y0).all(), 'non-finite values in state `y`: {}'.format(y0)
 
-        ########################################################
-        #     Make step, respecting prescribed grid points     #
-        ########################################################
-
-        # Must be arranged as doing all the step_t handling, then all the jump_t handling, in case we
-        # trigger both. (i.e. interleaving them would be wrong.)
-
+        t3 = time.time()
         y1, f1, y1_error, k = _runge_kutta_step(self.func, y0, f0, t0, dt, t1, tableau=self.tableau)
-        # dtypes:
-        # y1.dtype == self.y0.dtype
-        # f1.dtype == self.y0.dtype
-        # y1_error.dtype == self.dtype
-        # k.dtype == self.y0.dtype
+        t4 = time.time()
+        self.profiler['_runge_kutta_step'] += t4 - t3
 
-        ########################################################
-        #                     Error Ratio                      #
-        ########################################################
+        t5 = time.time()
         error_ratio = _compute_error_ratio(y1_error, self.rtol, self.atol, y0, y1, self.norm)
+        t6 = time.time()
+        self.profiler['_compute_error_ratio'] += t6 - t5
         accept_step = error_ratio <= 1
-        # dtypes:
-        # error_ratio.dtype == self.dtype
 
-        ########################################################
-        #                   Update RK State                    #
-        ########################################################
         if accept_step:
             t_next = t1
             y_next = y1
@@ -192,14 +226,34 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeODESolver):
             t_next = t0
             y_next = y0
             f_next = f0
+
+        t7 = time.time()
         dt_next = _optimal_step_size(dt, error_ratio, self.safety, self.ifactor, self.dfactor, self.order)
+        t8 = time.time()
+        self.profiler['_optimal_step_size'] += t8 - t7
+
         rk_state = _RungeKuttaState(y_next, f_next, t0, t_next, dt_next, interp_coeff)
+
+        t2 = time.time()
+        self.profiler['_adaptive_step'] += t2 - tt1
         return rk_state
 
     def _interp_fit(self, y0, y1, k, dt):
         """Fit an interpolating polynomial to the results of a Runge-Kutta step."""
+        t1 = time.time()
         dt = dt.type_as(y0)
         y_mid = y0 + k.matmul(dt * self.mid).view_as(y0)
         f0 = k[..., 0]
         f1 = k[..., -1]
-        return _interp_fit(y0, y1, y_mid, f0, f1, dt)
+
+        t3 = time.time()
+        fit = _interp_fit(y0, y1, y_mid, f0, f1, dt)
+        t4 = time.time()
+        self.profiler['_interp_fit_ext'] += t4 - t3
+
+        t2 = time.time()
+        self.profiler['_interp_fit'] += t2 - t1
+        return fit
+
+    def profile(self):
+        print(sorted( ((v,k) for k,v in self.profiler.items()), reverse=True))

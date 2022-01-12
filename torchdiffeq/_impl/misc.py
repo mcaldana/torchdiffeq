@@ -85,7 +85,15 @@ def _optimal_step_size(last_step, error_ratio, safety, ifactor, dfactor, order):
         dfactor = torch.ones((), dtype=last_step.dtype, device=last_step.device)
     error_ratio = error_ratio.type_as(last_step)
     exponent = torch.tensor(order, dtype=last_step.dtype, device=last_step.device).reciprocal()
-    factor = torch.min(ifactor, torch.max(safety / error_ratio ** exponent, dfactor))
+    factor = torch.min(ifactor, torch.max(safety / error_ratio.pow(exponent), dfactor))
+    # print('last_step', last_step)
+    # print('error_ratio',error_ratio)
+    # print('exponent',exponent)
+    # print('error_ratio.pow(exponent)',error_ratio.pow(exponent))
+    # print('safety', safety)
+    # print('safety / error_ratio.pow(exponent)',safety / error_ratio.pow(exponent))
+    # print('factor',factor)
+    # print('last_step * factor',last_step * factor)
     return last_step * factor
 
 

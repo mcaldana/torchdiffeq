@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torchdiffeq import odeint_adjoint as odeint
+from torchdiffeq import odeint
 
 import logging
 import datetime
@@ -129,12 +129,13 @@ class ODEFunc(nn.Module):
 
         for m in self.net.modules():
             if isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, mean=0, std=0.1)
+                nn.init.constant_(m.weight, val=0.1)
                 nn.init.constant_(m.bias, val=0)
 
     def forward(self, t, y):
         return self.net(y**3)
 
+from torchdiffeq._impl.rk_common import tl
 
 if __name__ == '__main__':
 
@@ -147,12 +148,18 @@ if __name__ == '__main__':
     for itr in range(1, args.niters + 1):
         optimizer.zero_grad()
         batch_y0, batch_t, batch_y = get_batch()
-        pred_y = odeint(func, batch_y0, batch_t, method='dopri5').to(device)
+        pred_y = odeint(func, batch_y0, batch_t, method='dopri5', options={'dtype':torch.float32}).to(device)
         loss = torch.mean(torch.abs(pred_y - batch_y))
         loss.backward()
         optimizer.step()
 
-        logging.info('Loss: {}'.format(loss.item()))
+        tl(batch_y0, batch_t, batch_y, pred_y, loss)
+        for p in func.parameters():
+            print(p.grad)
+        
+        #print([p for p in func.parameters()])
+        #logging.info('Loss: {}'.format(loss.item()))
+        raise ValueError("AABB")
 
         if itr % args.test_freq == 0:
             with torch.no_grad():

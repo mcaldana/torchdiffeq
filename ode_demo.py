@@ -11,6 +11,8 @@ from torchdiffeq import odeint
 import logging
 import datetime
 
+from true_y import TRUE_Y
+
 parser = argparse.ArgumentParser('ODE demo')
 parser.add_argument('--data_size', type=int, default=1000)
 parser.add_argument('--batch_time', type=int, default=10)
@@ -46,7 +48,7 @@ class Lambda(nn.Module):
 
 
 with torch.no_grad():
-    true_y = odeint(Lambda(), true_y0, t, method='dopri5')
+    true_y = TRUE_Y #odeint(Lambda(), true_y0, t, method='dopri5')
 
 
 def get_batch():
@@ -153,10 +155,17 @@ if __name__ == '__main__':
         loss.backward()
         optimizer.step()
 
+        print("#pragma once")
+        print("#include <torch/torch.h>")
+        print('#include "../utils/types.h"')
+        print("namespace dump {")
+        print("using namespace torchdiffeq;")
         tl(batch_y0, batch_t, batch_y, pred_y, loss)
+        print('}  // namespace dump')
+        print('namespace dumpgrad {')
+        print('using namespace torchdiffeq;')
         tl(*[p.grad for p in func.parameters()])
-        #print([p for p in func.parameters()])
-        #logging.info('Loss: {}'.format(loss.item()))
+        print('}  // namespace dumpgrad')
         raise ValueError("AABB")
 
         if itr % args.test_freq == 0:

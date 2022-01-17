@@ -178,72 +178,45 @@ class RKAdaptiveStepsizeODESolver(AdaptiveStepsizeODESolver):
 
     def _advance(self, next_t):
         """Interpolate through the next time point, integrating as necessary."""
-        t1 = time.time()
         n_steps = 0
-        # while next_t > self.rk_state.t1:
-        #     assert n_steps < self.max_num_steps, 'max_num_steps exceeded ({}>={})'.format(n_steps, self.max_num_steps)
-        #     self.rk_state = self._adaptive_step(self.rk_state)
-        #     n_steps += 1
-        self.rk_state = _RungeKuttaState(
-            self.rk_state.y1, 
-            self.rk_state.f1, 
-            self.rk_state.t0, 
-            next_t + self.rk_state.dt, 
-            self.rk_state.dt, 
-            self.rk_state.interp_coeff
-        )
-
-        t5 = time.time()
-        eval = _interp_evaluate(self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, next_t)
-        t6 = time.time()
-        self.profiler['_interp_evaluate'] += t6 - t5
-        
-        t2 = time.time()
-        self.profiler['_advance'] += t2 - t1
-        return eval
+        while next_t > self.rk_state.t1:
+            assert n_steps < self.max_num_steps, 'max_num_steps exceeded ({}>={})'.format(n_steps, self.max_num_steps)
+            self.rk_state = self._adaptive_step(self.rk_state)
+            n_steps += 1
+            
+        return _interp_evaluate(self.rk_state.interp_coeff, self.rk_state.t0, self.rk_state.t1, next_t)
 
     def _adaptive_step(self, rk_state):
         """Take an adaptive Runge-Kutta step to integrate the ODE."""
-        tt1 = time.time()
-
-
         y0, f0, _, t0, dt, interp_coeff = rk_state
         t1 = t0 + dt
 
         assert t0 + dt > t0, 'underflow in dt {}'.format(dt.item())
         assert torch.isfinite(y0).all(), 'non-finite values in state `y`: {}'.format(y0)
 
-        t3 = time.time()
-        y1, f1, y1_error, k = _runge_kutta_step(self.func, y0, f0, t0, dt, t1, tableau=self.tableau)
-        t4 = time.time()
-        self.profiler['_runge_kutta_step'] += t4 - t3
+        # y1, f1, y1_error, k = _runge_kutta_step(self.func, y0, f0, t0, dt, t1, tableau=self.tableau)
+        # error_ratio = _compute_error_ratio(y1_error, self.rtol, self.atol, y0, y1, self.norm)
+        # accept_step = error_ratio <= 1
 
-        t5 = time.time()
-        error_ratio = _compute_error_ratio(y1_error, self.rtol, self.atol, y0, y1, self.norm)
-        t6 = time.time()
-        self.profiler['_compute_error_ratio'] += t6 - t5
-        accept_step = error_ratio <= 1
+        # if accept_step:
+        #     t_next = t1
+        #     y_next = y1
+        #     interp_coeff = self._interp_fit(y0, y_next, k, dt)
+        #     f_next = f1
+        # else:
+        #     t_next = t0
+        #     y_next = y0
+        #     f_next = f0
 
-        if accept_step:
-            t_next = t1
-            y_next = y1
-            interp_coeff = self._interp_fit(y0, y_next, k, dt)
-            f_next = f1
-        else:
-            t_next = t0
-            y_next = y0
-            f_next = f0
-
-        t7 = time.time()
-        dt_next = _optimal_step_size(dt, error_ratio, self.safety, self.ifactor, self.dfactor, self.order)
-        t8 = time.time()
-        self.profiler['_optimal_step_size'] += t8 - t7
-
-        rk_state = _RungeKuttaState(y_next, f_next, t0, t_next, dt_next, interp_coeff)
-
-        t2 = time.time()
-        self.profiler['_adaptive_step'] += t2 - tt1
-        return rk_state
+        # dt_next = _optimal_step_size(dt, error_ratio, self.safety, self.ifactor, self.dfactor, self.order)
+        return _RungeKuttaState(
+            y0, 
+            f0, 
+            t0, 
+            t1, 
+            self.rk_state.dt, 
+            self.rk_state.interp_coeff
+        )
 
     def _interp_fit(self, y0, y1, k, dt):
         """Fit an interpolating polynomial to the results of a Runge-Kutta step."""

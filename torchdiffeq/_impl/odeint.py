@@ -9,8 +9,6 @@ from .dopri8 import Dopri8Solver
 from .scipy_wrapper import ScipyWrapperODESolver
 from .misc import _check_inputs
 
-import time
-
 SOLVERS = {
     'dopri8': Dopri8Solver,
     'dopri5': Dopri5Solver,
@@ -75,9 +73,4 @@ def odeint(func, y0, t, *, rtol=1e-7, atol=1e-9, method=None, options=None):
 
     assert shapes is None 
 
-    start = time.time()
-    sol = solver.integrate(t)
-    end = time.time()
-    #print('time:', end - start)
-    #solver.profile()
-    return sol
+    return solver.integrate(t)
